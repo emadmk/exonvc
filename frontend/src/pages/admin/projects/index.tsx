@@ -94,6 +94,8 @@ const ProjectManagement: React.FC = () => {
     limit: 20,
     total: 0
   });
+  const [sortBy, setSortBy] = useState('created_at');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
   // Form state
   const [projectForm, setProjectForm] = useState<ProjectForm>({
@@ -146,22 +148,30 @@ const ProjectManagement: React.FC = () => {
   // Fetch projects
   useEffect(() => {
     fetchProjects();
-  }, [filters, pagination.offset]);
+  }, [filters, pagination.offset, sortBy, sortOrder]);
 
   const fetchProjects = async () => {
     try {
       setLoading(true);
       const token = localStorage.getItem('admin_token');
       
+      if (!token) {
+        router.push('/admin/login');
+        return;
+      }
+
       const params = new URLSearchParams({
         limit: pagination.limit.toString(),
         offset: pagination.offset.toString(),
-        ...(filters.search && { search: filters.search }),
-        ...(filters.status && { status: filters.status }),
-        ...(filters.category && { category: filters.category }),
-        ...(filters.risk_level && { risk_level: filters.risk_level }),
-        ...(filters.is_featured && { is_featured: filters.is_featured })
+        sort_by: sortBy,
+        sort_order: sortOrder
       });
+
+      if (filters.search.trim()) params.append('search', filters.search);
+      if (filters.status) params.append('status', filters.status);
+      if (filters.category) params.append('category', filters.category);
+      if (filters.risk_level) params.append('risk_level', filters.risk_level);
+      if (filters.is_featured) params.append('is_featured', filters.is_featured);
 
       const response = await fetch(`/api/admin/projects?${params}`, {
         headers: {
@@ -170,15 +180,59 @@ const ProjectManagement: React.FC = () => {
         }
       });
 
+      if (response.status === 401 || response.status === 403) {
+        localStorage.removeItem('admin_token');
+        router.push('/admin/login');
+        return;
+      }
+
       if (!response.ok) {
-        throw new Error('Failed to fetch projects');
+        throw new Error(`HTTP ${response.status}: Failed to fetch projects`);
       }
 
       const data = await response.json();
-      setProjects(data.projects);
+      
+      // Transform backend data to match frontend interface
+      const transformedProjects: Project[] = data.projects.map((project: any) => ({
+        id: project.id,
+        title: project.title,
+        short_description: project.short_description || '',
+        description: project.description || '',
+        content: project.content || '',
+        category: project.category,
+        target_amount: project.target_amount,
+        raised_amount: project.raised_amount,
+        progress: project.progress,
+        min_investment: project.min_investment,
+        max_investment: project.max_investment,
+        expected_return: project.expected_return,
+        actual_return: project.actual_return,
+        duration_months: project.duration_months,
+        status: project.status,
+        is_active: project.is_active,
+        is_featured: project.is_featured,
+        priority: project.priority || 0,
+        location: project.location || '',
+        main_image: project.main_image || '',
+        gallery: project.gallery || [],
+        video_url: project.video_url || '',
+        features: project.features || [],
+        risk_level: project.risk_level,
+        tags: project.tags || [],
+        start_date: project.start_date,
+        end_date: project.end_date,
+        funding_deadline: project.funding_deadline,
+        created_at: project.created_at,
+        updated_at: project.updated_at,
+        total_investors: project.total_investors || 0,
+        total_raised: project.total_raised || project.raised_amount
+      }));
+
+      setProjects(transformedProjects);
       setPagination(prev => ({ ...prev, total: data.total }));
-    } catch (err) {
-      setError('خطا در دریافت پروژه‌ها');
+      setError(null);
+    } catch (err: any) {
+      setError('خطا در دریافت پروژه‌ها: ' + err.message);
       console.error('Fetch projects error:', err);
     } finally {
       setLoading(false);
@@ -189,26 +243,53 @@ const ProjectManagement: React.FC = () => {
     try {
       const token = localStorage.getItem('admin_token');
       
+      // Prepare project data for backend
+      const projectData = {
+        title: projectForm.title,
+        short_description: projectForm.short_description,
+        description: projectForm.description,
+        content: projectForm.content,
+        category: projectForm.category,
+        target_amount: projectForm.target_amount,
+        min_investment: projectForm.min_investment,
+        max_investment: projectForm.max_investment || null,
+        expected_return: projectForm.expected_return,
+        duration_months: projectForm.duration_months,
+        status: projectForm.status,
+        is_active: projectForm.is_active,
+        is_featured: projectForm.is_featured,
+        priority: projectForm.priority,
+        location: projectForm.location,
+        risk_level: projectForm.risk_level,
+        features: projectForm.features
+      };
+      
       const response = await fetch('/api/admin/projects', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(projectForm)
+        body: JSON.stringify(projectData)
       });
 
       if (!response.ok) {
-        throw new Error('Failed to create project');
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Failed to create project');
       }
 
+      const result = await response.json();
+      
       setShowCreateModal(false);
       resetForm();
       fetchProjects();
-      // Show success message
-    } catch (err) {
+      
+      // Show success notification
+      alert('پروژه با موفقیت ایجاد شد');
+      
+    } catch (err: any) {
       console.error('Create project error:', err);
-      setError('خطا در ایجاد پروژه');
+      setError(`خطا در ایجاد پروژه: ${err.message}`);
     }
   };
 
@@ -235,6 +316,8 @@ const ProjectManagement: React.FC = () => {
       setSelectedProject(null);
       resetForm();
       fetchProjects();
+      
+      alert('پروژه با موفقیت به‌روزرسانی شد');
     } catch (err) {
       console.error('Update project error:', err);
       setError('خطا در به‌روزرسانی پروژه');
@@ -261,6 +344,8 @@ const ProjectManagement: React.FC = () => {
       setShowDeleteModal(false);
       setSelectedProject(null);
       fetchProjects();
+      
+      alert('پروژه با موفقیت حذف شد');
     } catch (err) {
       console.error('Delete project error:', err);
       setError('خطا در حذف پروژه');
@@ -887,53 +972,6 @@ const ProjectManagement: React.FC = () => {
                 className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded-lg transition-colors"
               >
                 ایجاد پروژه
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Edit Modal - Similar structure to Create Modal */}
-      {showEditModal && selectedProject && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-900 rounded-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-6 border-b border-gray-700">
-              <div className="flex items-center justify-between">
-                <h2 className="text-2xl font-bold text-white">ویرایش پروژه: {selectedProject.title}</h2>
-                <button
-                  onClick={() => {
-                    setShowEditModal(false);
-                    setSelectedProject(null);
-                    resetForm();
-                  }}
-                  className="text-gray-400 hover:text-white"
-                >
-                  <X className="h-6 w-6" />
-                </button>
-              </div>
-            </div>
-
-            <div className="p-6 space-y-6">
-              {/* Same form fields as Create Modal */}
-              {/* For brevity, I'll show just the action buttons */}
-            </div>
-
-            <div className="p-6 border-t border-gray-700 flex justify-end space-x-4 space-x-reverse">
-              <button
-                onClick={() => {
-                  setShowEditModal(false);
-                  setSelectedProject(null);
-                  resetForm();
-                }}
-                className="px-6 py-2 text-gray-400 hover:text-white transition-colors"
-              >
-                لغو
-              </button>
-              <button
-                onClick={handleUpdateProject}
-                className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded-lg transition-colors"
-              >
-                به‌روزرسانی پروژه
               </button>
             </div>
           </div>

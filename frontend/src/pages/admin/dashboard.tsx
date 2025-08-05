@@ -101,17 +101,49 @@ const AdminDashboard: React.FC = () => {
         }
       });
 
-      if (response.status === 401) {
+      if (response.status === 401 || response.status === 403) {
+        localStorage.removeItem('admin_token');
+        localStorage.removeItem('admin_user');
         router.push('/admin/login');
         return;
       }
 
       if (!response.ok) {
-        throw new Error('Failed to fetch dashboard data');
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
       const data = await response.json();
-      setStats(data);
+      
+      // Transform backend data to match frontend interface
+      const transformedStats: DashboardStats = {
+        overview: {
+          total_users: data.overview.total_users,
+          active_users: data.overview.active_users,
+          new_users_today: data.overview.new_users_today,
+          total_projects: data.overview.total_projects,
+          active_projects: data.overview.active_projects,
+          online_users: data.overview.online_users || 0
+        },
+        financial: {
+          total_investments: data.financial.total_investments,
+          total_returns: data.financial.total_returns,
+          pending_payments: data.financial.pending_payments,
+          overdue_payments: data.financial.overdue_payments,
+          net_profit: data.financial.net_profit
+        },
+        recent_activity: {
+          new_investments: data.recent_activity.new_investments,
+          new_users: data.recent_activity.new_users
+        },
+        top_projects: data.top_projects.map((project: any) => ({
+          id: project.id,
+          title: project.title,
+          total_invested: project.total_invested,
+          investor_count: project.investor_count
+        }))
+      };
+      
+      setStats(transformedStats);
     } catch (err) {
       setError('خطا در دریافت اطلاعات داشبورد');
       console.error('Dashboard error:', err);
@@ -130,13 +162,59 @@ const AdminDashboard: React.FC = () => {
 
       if (response.ok) {
         const data = await response.json();
-        setChartData(data);
+        
+        // Transform backend chart data
+        const transformedChartData: ChartData = {
+          daily_investments: data.daily_investments.map((item: any) => ({
+            date: item.date,
+            amount: item.amount,
+            count: item.count
+          })),
+          daily_users: data.daily_users.map((item: any) => ({
+            date: item.date,
+            count: item.count
+          })),
+          category_investments: data.category_investments.map((item: any) => ({
+            category: getCategoryDisplayName(item.category),
+            amount: item.amount,
+            count: item.count
+          })),
+          device_stats: data.device_stats.map((item: any) => ({
+            device: getDeviceDisplayName(item.device),
+            count: item.count
+          }))
+        };
+        
+        setChartData(transformedChartData);
       }
     } catch (err) {
       console.error('Chart data error:', err);
     } finally {
       setLoading(false);
     }
+  };
+
+  // Helper functions for display names
+  const getCategoryDisplayName = (category: string) => {
+    const categoryNames: { [key: string]: string } = {
+      'restaurant': 'رستوران',
+      'cafe': 'کافه',
+      'gold': 'طلا',
+      'restaurant_dubai': 'رستوران دبی',
+      'real_estate': 'املاک',
+      'technology': 'فناوری'
+    };
+    return categoryNames[category] || category;
+  };
+
+  const getDeviceDisplayName = (device: string) => {
+    const deviceNames: { [key: string]: string } = {
+      'mobile': 'موبایل',
+      'desktop': 'دسکتاپ',
+      'tablet': 'تبلت',
+      'unknown': 'نامشخص'
+    };
+    return deviceNames[device] || device;
   };
 
   const checkAdminAuth = () => {
