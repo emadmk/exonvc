@@ -512,8 +512,8 @@ class ContentManagement(Base):
     video_url = Column(String(255))
     icon = Column(String(100))
     
-    # Metadata
-    metadata = Column(JSON)  # Flexible metadata storage
+    # Metadata - تغییر نام برای جلوگیری از conflict
+    extra_data = Column(JSON)  # Flexible metadata storage (تغییر از metadata)
     seo_title = Column(String(200))
     seo_description = Column(String(500))
     seo_keywords = Column(JSON)
@@ -554,7 +554,7 @@ class ContentManagement(Base):
             "gallery": self.gallery or [],
             "video_url": self.video_url,
             "icon": self.icon,
-            "metadata": self.metadata or {},
+            "extra_data": self.extra_data or {},  # تغییر از metadata
             "seo_title": self.seo_title,
             "seo_description": self.seo_description,
             "seo_keywords": self.seo_keywords or [],

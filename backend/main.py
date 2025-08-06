@@ -8,7 +8,7 @@ import random
 from datetime import datetime, timedelta, date
 from typing import Optional, List, Dict, Any
 from decimal import Decimal
-
+from auth import send_otp_sms
 from fastapi import FastAPI, WebSocket, HTTPException, Depends, Body, Header, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
@@ -17,6 +17,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, or_, desc, asc
 from pydantic import BaseModel, EmailStr
 import jwt
+
+# Load environment variables
+from dotenv import load_dotenv
+load_dotenv()
 
 # Ensure data directory exists
 os.makedirs("/app/data", exist_ok=True)
@@ -30,6 +34,62 @@ from models import (
     ChatLog, AdminUser, SiteSettings
 )
 
+# ==================== ENVIRONMENT CONFIGURATION ====================
+
+# App Configuration
+APP_ENV = os.getenv("APP_ENV", os.getenv("ENVIRONMENT", "development"))
+DEBUG = os.getenv("DEBUG", "true" if APP_ENV == "development" else "false").lower() == "true"
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+# Host & Port
+BACKEND_HOST = os.getenv("BACKEND_HOST", "0.0.0.0")  
+BACKEND_PORT = int(os.getenv("BACKEND_PORT", "8050"))  # از docker-compose
+
+# Security Configuration
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "exonvc-secret-key-change-in-production")
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+JWT_EXPIRATION_HOURS = int(os.getenv("JWT_EXPIRATION_HOURS", "24"))
+
+# API Keys
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+KAVENEGAR_API_KEY = os.getenv("KAVENEGAR_API_KEY", "")
+
+# Database Configuration (از docker-compose)
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://exonvc_user:exonvc_password@db:5432/exonvc_invest")
+
+# CORS Configuration
+allowed_origins_str = os.getenv("ALLOWED_ORIGINS", "https://invest.exonvc.ir,http://localhost:3050")
+ALLOWED_ORIGINS = [origin.strip() for origin in allowed_origins_str.split(",")]
+
+# File Upload Configuration  
+UPLOAD_PATH = os.getenv("UPLOAD_PATH", "/app/data/uploads")
+MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE", "10485760"))  # 10MB
+ALLOWED_EXTENSIONS = os.getenv("ALLOWED_EXTENSIONS", "jpg,jpeg,png,gif,pdf,doc,docx").split(",")
+
+# Admin Configuration
+DEFAULT_ADMIN_USERNAME = os.getenv("DEFAULT_ADMIN_USERNAME", "admin")
+DEFAULT_ADMIN_PASSWORD = os.getenv("DEFAULT_ADMIN_PASSWORD", "admin123")
+DEFAULT_ADMIN_EMAIL = os.getenv("DEFAULT_ADMIN_EMAIL", "admin@exonvc.ir")
+
+# Development Features
+AUTO_MIGRATE = os.getenv("AUTO_MIGRATE", "true" if APP_ENV == "development" else "false").lower() == "true"
+SEED_SAMPLE_DATA = os.getenv("SEED_SAMPLE_DATA", "true" if APP_ENV == "development" else "false").lower() == "true"
+
+# Print configuration summary
+print("🔧 ExonVC Configuration:")
+print(f"   Environment: {APP_ENV}")
+print(f"   Debug Mode: {DEBUG}")
+print(f"   Host:Port: {BACKEND_HOST}:{BACKEND_PORT}")
+print(f"   Database: {DATABASE_URL.split('@')[1] if '@' in DATABASE_URL else 'SQLite'}")
+print(f"   OpenAI API: {'✅ Configured' if OPENAI_API_KEY else '❌ Missing'}")
+print(f"   Kavenegar API: {'✅ Configured' if KAVENEGAR_API_KEY else '❌ Missing'}")
+print(f"   CORS Origins: {ALLOWED_ORIGINS}")
+
+# Ensure upload directory exists
+os.makedirs(UPLOAD_PATH, exist_ok=True)
+
+# ==================== FASTAPI INITIALIZATION ====================
+
 # Initialize FastAPI
 app = FastAPI(
     title="ExonVC Investment Platform",
@@ -42,7 +102,7 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify exact origins
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -50,14 +110,6 @@ app.add_middleware(
 
 # Security
 security = HTTPBearer()
-
-# Constants and Configuration
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "exonvc-secret-key-change-in-production")
-JWT_ALGORITHM = "HS256"
-JWT_EXPIRATION_HOURS = 24
-
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-KAVENEGAR_API_KEY = os.getenv("KAVENEGAR_API_KEY", "")
 
 # WebSocket connections and chat memories
 active_connections = {}
@@ -142,19 +194,6 @@ def verify_admin_token(token: str, db: Session):
     
     return admin
 
-async def send_otp_sms(phone: str, otp_code: str):
-    """Send OTP via Kavenegar SMS service"""
-    if not KAVENEGAR_API_KEY:
-        print(f"⚠️ SMS disabled - OTP for {phone}: {otp_code}")
-        return True
-    
-    try:
-        # In production, implement actual Kavenegar API call
-        print(f"📱 SMS sent to {phone}: {otp_code}")
-        return True
-    except Exception as e:
-        print(f"❌ SMS sending failed: {e}")
-        return False
 
 def log_user_action(db: Session, user_id: Optional[int], session_id: Optional[str], 
                    action_type: str, page_url: str, additional_data: dict = None):
@@ -223,6 +262,7 @@ async def health_check():
         "status": "healthy" if db_health["status"] == "healthy" else "degraded",
         "timestamp": datetime.utcnow().isoformat(),
         "version": "2.0.0",
+        "environment": APP_ENV,
         "database": db_health,
         "services": {
             "openai": "configured" if OPENAI_API_KEY else "not_configured",
@@ -239,6 +279,8 @@ async def system_info(db: Session = Depends(get_db)):
         return {
             "database": db_info,
             "environment": {
+                "app_env": APP_ENV,
+                "debug": DEBUG,
                 "openai_configured": bool(OPENAI_API_KEY),
                 "sms_configured": bool(KAVENEGAR_API_KEY),
                 "jwt_configured": bool(JWT_SECRET_KEY)
@@ -776,14 +818,18 @@ async def websocket_endpoint(websocket: WebSocket, db: Session = Depends(get_db)
         if client_id in chat_memories:
             del chat_memories[client_id]
 
+# Include admin router
+from admin import router as admin_router
+app.include_router(admin_router)
+
 # ==================== MAIN ENTRY POINT ====================
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
         "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
+        host=BACKEND_HOST,
+        port=BACKEND_PORT,
+        reload=DEBUG,
+        log_level=LOG_LEVEL.lower()
     )
